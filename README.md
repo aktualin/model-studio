@@ -27,8 +27,26 @@ Fill in `.env.local`:
 - `AI_PROVIDER` — `anthropic` (default) or `modelstudio`.
 - `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` — the one real upstream key/model every virtual key
   proxies to, when `AI_PROVIDER=anthropic`.
+- `ANTHROPIC_BASE_URL` — optional; overrides the upstream host for the `anthropic` provider.
+  Defaults to `https://api.anthropic.com`, but any Anthropic-compatible host works (e.g. an
+  Aliyun Model Studio Token Plan endpoint, `https://token-plan.<region>.maas.aliyuncs.com/apps/anthropic`).
 - `MODEL_STUDIO_API_KEY` / `MODEL_STUDIO_BASE_URL` / `MODEL_STUDIO_MODEL` — only used when
   `AI_PROVIDER=modelstudio`.
+- `UPSTREAM_MODEL_OVERRIDE` / `UPSTREAM_MAX_OUTPUT_TOKENS` — optional. When set, every proxied
+  request's `model` field is rewritten to this id before forwarding (useful when the real plan
+  only serves one model), and `max_tokens` is clamped to the given ceiling. `GET /api/v1/models`
+  still advertises the full Claude lineup (`claude-opus-5-5`, `-sonnet-5-5`, `-haiku-5-5`,
+  `-fable-5-2`) regardless — clients pick any of those, and they all resolve to the same
+  override model server-side.
+- `ZILLIZ_ENDPOINT` / `ZILLIZ_TOKEN` / `ZILLIZ_COLLECTION` / `SEMANTIC_CACHE_THRESHOLD` —
+  optional. When set, non-streaming `POST /api/v1/messages` calls are checked against a
+  semantic cache in Zilliz Cloud before hitting the model, to avoid re-spending tokens on
+  near-duplicate prompts. The "embedding" is a dependency-free local hashing-trick vector (see
+  `src/lib/local-embedding.ts`), not a learned model — it catches near-identical prompts, not
+  true paraphrase semantics. Any Zilliz failure (unreachable, misconfigured, shared-cluster
+  hiccup) silently falls through to calling the model normally; nothing ever blocks on it.
+  `ZILLIZ_COLLECTION` namespaces this app's data on a cluster that may be shared with others —
+  never point it at a collection name you don't own.
 
 Run the first migration (uses `DIRECT_URL`):
 
@@ -61,6 +79,18 @@ Open <http://localhost:3000> — it redirects to `/admin`.
    for `AI_PROVIDER=anthropic`, or `MODEL_STUDIO_BASE_URL` for `modelstudio`) with the server's
    real credentials swapped in — streaming included.
 3. Requests over the key's rps/tpm limits get a `429`; a revoked or expired key gets a `401`.
+4. `GET /api/v1/models` (same auth) lists the Claude-style model ids clients can ask for.
+
+## Running tests
+
+```bash
+npm test
+```
+
+Unit tests (Vitest) cover key hashing/generation, the per-key rate limiter, the model
+rewrite/clamp logic, the local embedding/cosine-similarity used by the semantic cache, and the
+Anthropic Messages JSON helpers. They don't touch a real database or network — `npm run build`
+and manual testing against `/admin` are still how the full integration gets verified.
 
 ## Deploying to Vercel
 

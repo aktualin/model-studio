@@ -40,11 +40,14 @@ function getUpstreamTarget(): UpstreamTarget {
   if (!apiKey) {
     throw new Error("ANTHROPIC_API_KEY belum diset di server.");
   }
+  // ANTHROPIC_BASE_URL lets this point at any Anthropic-compatible host
+  // (e.g. an Aliyun Model Studio Token Plan endpoint) instead of the real
+  // Anthropic API. Our route is mounted at /api/v1/*, so the captured path
+  // never includes "v1" — bake it into the base so e.g. /api/v1/messages
+  // forwards to "<base>/v1/messages".
+  const base = (process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com").replace(/\/+$/, "");
   return {
-    // Our route is mounted at /api/v1/*, so the captured path never
-    // includes "v1" — bake it into the base so e.g. /api/v1/messages
-    // forwards to the real https://api.anthropic.com/v1/messages.
-    baseUrl: "https://api.anthropic.com/v1",
+    baseUrl: `${base}/v1`,
     authHeaderName: "x-api-key",
     authHeaderValue: apiKey,
     extraHeaders: { "anthropic-version": "2023-06-01" },
@@ -139,6 +142,11 @@ async function recordRequest(apiKeyId: string): Promise<void> {
     .catch(() => undefined);
 }
 
+/** A semantic-cache hit: served without an upstream call, so no tokens spent. */
+export async function recordCacheHit(apiKeyId: string): Promise<void> {
+  await recordRequest(apiKeyId);
+}
+
 async function recordTokens(apiKeyId: string, tokens: number): Promise<void> {
   recordTokenUsage(apiKeyId, tokens);
   await prisma.apiKey
@@ -146,12 +154,24 @@ async function recordTokens(apiKeyId: string, tokens: number): Promise<void> {
     .catch(() => undefined);
 }
 
+export interface ForwardOptions {
+  /** Pre-read (and possibly rewritten) body text, in place of reading `request` again. */
+  bodyTextOverride?: string;
+  /** Called with the fully-buffered response text once the stream finishes. */
+  onResponseText?: (text: string) => void;
+}
+
 /**
  * Forwards the request byte-for-byte to the configured upstream provider and
  * streams the raw response straight back — no reparsing of the Anthropic /
  * OpenAI-compatible message format, by design.
  */
-export async function forwardToUpstream(request: Request, path: string[], apiKeyId: string): Promise<Response> {
+export async function forwardToUpstream(
+  request: Request,
+  path: string[],
+  apiKeyId: string,
+  options: ForwardOptions = {},
+): Promise<Response> {
   let target: UpstreamTarget;
   try {
     target = getUpstreamTarget();
@@ -171,7 +191,7 @@ export async function forwardToUpstream(request: Request, path: string[], apiKey
   }
 
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
-  const bodyText = hasBody ? await request.text() : undefined;
+  const bodyText = options.bodyTextOverride ?? (hasBody ? await request.text() : undefined);
 
   let upstreamResponse: Response;
   try {
@@ -206,6 +226,7 @@ export async function forwardToUpstream(request: Request, path: string[], apiKey
       if (usage !== null) {
         void recordTokens(apiKeyId, usage);
       }
+      options.onResponseText?.(buffered);
     },
   });
 
