@@ -1,0 +1,30 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// A virtual API key issued from the admin console. Every key proxies to the
+/// same underlying provider plan (ANTHROPIC_API_KEY / MODEL_STUDIO_API_KEY),
+/// but carries its own expiry and rate limits — mirroring how Claude Code /
+/// the Anthropic console issues scoped keys against one account.
+model ApiKey {
+  id                String    @id @default(cuid())
+  name              String
+  keyPrefix         String
+  hashedKey         String    @unique
+  requestsPerSecond Int       @default(5)
+  tokensPerMinute   Int       @default(100000)
+  expiresAt         DateTime?
+  revokedAt         DateTime?
+  lastUsedAt        DateTime?
+  requestCount      BigInt    @default(0)
+  tokenCount        BigInt    @default(0)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([hashedKey])
+}

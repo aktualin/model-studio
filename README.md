@@ -1,36 +1,87 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Model Studio
 
-## Getting Started
+Admin console for issuing **virtual API keys** that proxy to a single upstream AI provider
+plan (Anthropic, or an OpenAI-compatible Model Studio endpoint). Each virtual key gets its own
+name, requests-per-second limit, tokens-per-minute budget, and optional expiry — the same shape
+as how Anthropic's console / Claude Code issue scoped keys against one account. The proxy itself
+never reparses the Anthropic Messages / OpenAI chat format: it forwards requests and streams
+responses through byte-for-byte, so any client that already speaks that API works unmodified.
 
-First, run the development server:
+## Stack
+
+- Next.js 16 (App Router) + TypeScript (strict) + Tailwind CSS 4
+- Prisma 7 + `@prisma/adapter-pg`, PostgreSQL on Supabase
+- Deploy target: Vercel
+
+## Local setup
+
+```bash
+npm install
+cp .env.example .env.local
+```
+
+Fill in `.env.local`:
+
+- `DATABASE_URL` / `DIRECT_URL` — your Supabase Postgres connection strings (pooled on port
+  6543 for the app, direct on port 5432 for migrations).
+- `AI_PROVIDER` — `anthropic` (default) or `modelstudio`.
+- `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` — the one real upstream key/model every virtual key
+  proxies to, when `AI_PROVIDER=anthropic`.
+- `MODEL_STUDIO_API_KEY` / `MODEL_STUDIO_BASE_URL` / `MODEL_STUDIO_MODEL` — only used when
+  `AI_PROVIDER=modelstudio`.
+
+Run the first migration (uses `DIRECT_URL`):
+
+```bash
+npx prisma migrate dev --name init
+```
+
+Start the dev server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open <http://localhost:3000> — it redirects to `/admin`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Using a virtual key
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. In `/admin`, click **Buat API Key**, set its limits/expiry, and copy the secret shown once.
+2. Call the proxy exactly as you would call the real provider, but point the client at this app
+   and send the virtual key instead of the real one:
 
-## Learn More
+   ```bash
+   curl http://localhost:3000/api/v1/messages \
+     -H "x-api-key: sk-ms-..." \
+     -H "content-type: application/json" \
+     -d '{"model":"claude-sonnet-5-5","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}'
+   ```
 
-To learn more about Next.js, take a look at the following resources:
+   Any path under `/api/v1/*` is forwarded to the configured upstream (`https://api.anthropic.com`
+   for `AI_PROVIDER=anthropic`, or `MODEL_STUDIO_BASE_URL` for `modelstudio`) with the server's
+   real credentials swapped in — streaming included.
+3. Requests over the key's rps/tpm limits get a `429`; a revoked or expired key gets a `401`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Deploying to Vercel
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. Push this repo and import it in Vercel.
+2. Set the same environment variables from `.env.example` for both **Production** and
+   **Preview** in the project's dashboard.
+3. `npm run build` runs `prisma generate` before `next build` (see `package.json`).
+4. Apply migrations against the production database once, from your machine or CI:
 
-## Deploy on Vercel
+   ```bash
+   DIRECT_URL="<production direct url>" npx prisma migrate deploy
+   ```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+5. Verify: open the deployed `/admin` URL, create a key, and call `/api/v1/...` with it; check
+   function logs in the Vercel dashboard for errors.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Notes
+
+- The in-memory rate limiter in `src/lib/key-rate-limit.ts` is per-instance — fine for a single
+  deployment, but swap it for a shared store (e.g. Upstash Redis) if this ever runs across
+  multiple instances concurrently.
+- Request/token counters are best-effort: streamed responses are scanned for `usage` fields as
+  they pass through, so they reflect what the upstream actually reported.
+- No authentication guards `/admin` yet — add one before exposing it outside a trusted network.
