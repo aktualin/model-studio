@@ -18,5 +18,10 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
+    env: {
+      // src/lib/db.ts needs this to exist at import time (it's lazy-connect,
+      // so no real database is ever touched by the unit tests).
+      DATABASE_URL: "postgresql://user:pass@localhost:5432/test",
+    },
   },
 });

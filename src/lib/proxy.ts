@@ -24,10 +24,30 @@ interface UpstreamTarget {
   extraHeaders?: Record<string, string>;
 }
 
-function getUpstreamTarget(): UpstreamTarget {
+// Our route is mounted at /api/v1/*, so the captured path never includes
+// "v1" — bake it into the base so e.g. /api/v1/messages forwards to
+// "<base>/v1/messages".
+function withV1(base: string): string {
+  return `${base.replace(/\/+$/, "")}/v1`;
+}
+
+/** Exported for unit testing; not part of the module's intended public API otherwise. */
+export function getUpstreamTarget(): UpstreamTarget {
   const provider = process.env.AI_PROVIDER ?? "anthropic";
 
+  if (provider === "openai") {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error("OPENAI_API_KEY belum diset di server.");
+    }
+    const base = process.env.OPENAI_BASE_URL || "https://api.openai.com";
+    return { baseUrl: withV1(base), authHeaderName: "authorization", authHeaderValue: `Bearer ${apiKey}` };
+  }
+
   if (provider === "modelstudio") {
+    // MODEL_STUDIO_BASE_URL is documented to already include its own
+    // version path (e.g. a DashScope "compatible-mode/v1" URL), unlike the
+    // anthropic/openai branches below.
     const baseUrl = process.env.MODEL_STUDIO_BASE_URL;
     const apiKey = process.env.MODEL_STUDIO_API_KEY;
     if (!baseUrl || !apiKey) {
@@ -42,12 +62,10 @@ function getUpstreamTarget(): UpstreamTarget {
   }
   // ANTHROPIC_BASE_URL lets this point at any Anthropic-compatible host
   // (e.g. an Aliyun Model Studio Token Plan endpoint) instead of the real
-  // Anthropic API. Our route is mounted at /api/v1/*, so the captured path
-  // never includes "v1" — bake it into the base so e.g. /api/v1/messages
-  // forwards to "<base>/v1/messages".
-  const base = (process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com").replace(/\/+$/, "");
+  // Anthropic API.
+  const base = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
   return {
-    baseUrl: `${base}/v1`,
+    baseUrl: withV1(base),
     authHeaderName: "x-api-key",
     authHeaderValue: apiKey,
     extraHeaders: { "anthropic-version": "2023-06-01" },

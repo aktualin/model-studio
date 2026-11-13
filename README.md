@@ -24,7 +24,12 @@ Fill in `.env.local`:
 
 - `DATABASE_URL` / `DIRECT_URL` — your Supabase Postgres connection strings (pooled on port
   6543 for the app, direct on port 5432 for migrations).
-- `AI_PROVIDER` — `anthropic` (default) or `modelstudio`.
+- `AI_PROVIDER` — `anthropic` (default), `openai`, or `modelstudio`.
+- `OPENAI_API_KEY` / `OPENAI_BASE_URL` — only used when `AI_PROVIDER=openai`. Base URL defaults
+  to `https://api.openai.com`.
+- `AUTH_SECRET` / `ADMIN_EMAIL` / `ADMIN_PASSWORD` — required. `/admin/*` is gated by NextAuth
+  behind a single-admin credentials login (see `src/lib/auth.ts`, `src/proxy.ts`). Generate a
+  secret with `npx auth secret` (or `openssl rand -base64 33`); pick your own email/password.
 - `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` — the one real upstream key/model every virtual key
   proxies to, when `AI_PROVIDER=anthropic`.
 - `ANTHROPIC_BASE_URL` — optional; overrides the upstream host for the `anthropic` provider.
@@ -76,8 +81,8 @@ Open <http://localhost:3000> — it redirects to `/admin`.
    ```
 
    Any path under `/api/v1/*` is forwarded to the configured upstream (`https://api.anthropic.com`
-   for `AI_PROVIDER=anthropic`, or `MODEL_STUDIO_BASE_URL` for `modelstudio`) with the server's
-   real credentials swapped in — streaming included.
+   for `AI_PROVIDER=anthropic`, `https://api.openai.com` for `openai`, or `MODEL_STUDIO_BASE_URL`
+   for `modelstudio`) with the server's real credentials swapped in — streaming included.
 3. Requests over the key's rps/tpm limits get a `429`; a revoked or expired key gets a `401`.
 4. `GET /api/v1/models` (same auth) lists the Claude-style model ids clients can ask for.
 
@@ -107,6 +112,15 @@ and manual testing against `/admin` are still how the full integration gets veri
 5. Verify: open the deployed `/admin` URL, create a key, and call `/api/v1/...` with it; check
    function logs in the Vercel dashboard for errors.
 
+## Auth
+
+`/admin/*` requires signing in at `/login` with `ADMIN_EMAIL` / `ADMIN_PASSWORD` (NextAuth
+Credentials provider, JWT session, enforced by `src/proxy.ts`). This is a single-admin gate, not
+multi-user auth — there's no sign-up, and the password lives in one env var. A real "Sign in with
+Vercel" OAuth login is a natural upgrade once you register an OAuth client for this app in the
+Vercel dashboard (Team Settings → OAuth Apps) and set its client id/secret; nothing here
+fabricates that integration without real credentials to back it.
+
 ## Notes
 
 - The in-memory rate limiter in `src/lib/key-rate-limit.ts` is per-instance — fine for a single
@@ -114,4 +128,10 @@ and manual testing against `/admin` are still how the full integration gets veri
   multiple instances concurrently.
 - Request/token counters are best-effort: streamed responses are scanned for `usage` fields as
   they pass through, so they reflect what the upstream actually reported.
-- No authentication guards `/admin` yet — add one before exposing it outside a trusted network.
+- "Vercel database" today means a Marketplace integration rather than a first-party product —
+  Supabase Postgres (what this app already uses via Prisma) is one of those options.
+- Vercel no longer recommends the Edge runtime for most functions; the proxy and admin API
+  routes here run as regular Node.js (Fluid Compute) functions, which is the current guidance
+  and also the only way to use Node's `crypto`/`pg` APIs they depend on. `src/proxy.ts` (the
+  Next.js Proxy/middleware convention) still runs on Edge, which is why its auth check avoids
+  any Node-only APIs.
